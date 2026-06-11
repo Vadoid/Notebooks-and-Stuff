@@ -7,8 +7,9 @@
 # is the golden ticket for BigQuery Lakehouse Federation via Lakehouse runtime catalog. 
 #
 # This script will now:
-# 1. Flag suitable tables with 🌐 [BQ Federation Ready]
-# 2. Audit the Service Principal's permissions on the Catalogue and Table
+# 1. Identify Native Iceberg, UniForm v2, and UniForm v3 tables.
+# 2. Flag suitable tables with 🌐 [BQ Federation Ready] or ⚠️ [BQ Blocked]
+# 3. Audit the Service Principal's permissions on the Catalogue and Table
 #    to ensure it has full access (OWNER, ALL_PRIVILEGES, or MODIFY).
 # ==============================================================================
 
@@ -42,17 +43,17 @@ echo "--- Authenticated (Workspace ID: $WORKSPACE_ID) ---"
 echo "Auditing Service Principal: $CLIENT_ID"
 echo ""
 
-# 3. Fetch Catalogs (Extracting both Name and Storage Root)
+# 3. Fetch Catalogues (Extracting both Name and Storage Root)
 CATALOG_DATA=$(curl -s -H "Authorization: Bearer ${ACCESS_TOKEN}" \
     "https://${INSTANCE_ID}/api/2.1/unity-catalog/catalogs" | \
     jq -r '.catalogs[]? | 
     select(.name != "system" and .name != "main" and .name != "samples") | 
     "\(.name)|\(.storage_root // "NULL")"')
 
-# 4. Iterate through ALL selected catalogs
+# 4. Iterate through ALL selected catalogues
 while IFS='|' read -r CATALOG STORAGE_ROOT; do
     echo "====================================================="
-    echo "Scanning Catalog: $CATALOG"
+    echo "Scanning Catalogue: $CATALOG"
     
     IS_TRUE_EXTERNAL=false
     
@@ -87,19 +88,26 @@ while IFS='|' read -r CATALOG STORAGE_ROOT; do
             "https://${INSTANCE_ID}/api/2.1/unity-catalog/tables?catalog_name=${CATALOG}&schema_name=${SCHEMA}")
 
         # Extract Table Name and Type tag
-        # --- UPDATED JQ PARSING BLOCK ---
         RESULTS=$(echo "$TABLES_JSON" | jq -r '
             .tables[]? | 
             (.data_source_format // "" | ascii_downcase) as $format |
             (.table_type // "" | ascii_downcase) as $ttype |
             (.properties["delta.universalFormat.enabledFormats"] // "" | ascii_downcase | contains("iceberg")) as $is_uniform |
-            (.properties["delta.enableIcebergCompatV2"] // "" | ascii_downcase == "true") as $is_compat |
-            (.properties["delta.feature.icebergCompatV2"] // "" | ascii_downcase == "supported") as $is_compat_v2 |
+            
+            # Check for v2
+            (.properties["delta.enableIcebergCompatV2"] // "" | ascii_downcase == "true") as $is_compat_v2_old |
+            (.properties["delta.feature.icebergCompatV2"] // "" | ascii_downcase == "supported") as $is_compat_v2_new |
+            
+            # Check for v3
+            (.properties["delta.enableIcebergCompatV3"] // "" | ascii_downcase == "true") as $is_compat_v3_old |
+            (.properties["delta.feature.icebergCompatV3"] // "" | ascii_downcase == "supported") as $is_compat_v3_new |
 
             if ($format == "iceberg" or ($ttype | contains("iceberg"))) then
                 "[Native]|\(.full_name)"
-            elif ($format == "delta" and ($is_uniform or $is_compat or $is_compat_v2)) then
-                "[UniForm]|\(.full_name)"
+            elif ($format == "delta" and ($is_compat_v3_old or $is_compat_v3_new)) then
+                "[UniForm v3]|\(.full_name)"
+            elif ($format == "delta" and ($is_uniform or $is_compat_v2_old or $is_compat_v2_new)) then
+                "[UniForm v2]|\(.full_name)"
             else
                 empty
             end
@@ -113,7 +121,13 @@ while IFS='|' read -r CATALOG STORAGE_ROOT; do
                 
                 # If it's True External, it's suitable for BigQuery Federation
                 if [ "$IS_TRUE_EXTERNAL" == true ]; then
-                    FED_NOTE=" 🌐 [BQ Federation Ready]"
+                    
+                    # Distinguish between v2 and v3 for the Federation Note
+                    if [[ "$TAG" == *"[UniForm v3]"* ]]; then
+                        FED_NOTE=" ⚠️ [BQ Blocked: Iceberg v3 Preview Required]"
+                    else
+                        FED_NOTE=" 🌐 [BQ Federation Ready]"
+                    fi
                     
                     # --- AUDIT TABLE ACCESS ---
                     TBL_PERMS=$(curl -s -H "Authorization: Bearer ${ACCESS_TOKEN}" \
