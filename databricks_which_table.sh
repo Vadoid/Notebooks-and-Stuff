@@ -124,7 +124,7 @@ while IFS='|' read -r CATALOG STORAGE_ROOT; do
                     
                     # Distinguish between v2 and v3 for the Federation Note
                     if [[ "$TAG" == *"[UniForm v3]"* ]]; then
-                        FED_NOTE=" ⚠️ [BQ Blocked: Iceberg v3 Preview Required]"
+                        FED_NOTE=" ⚠️ [BQ Blocked: Iceberg v3]"
                     else
                         FED_NOTE=" 🌐 [BQ Federation Ready]"
                     fi
