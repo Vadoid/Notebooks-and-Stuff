@@ -6,8 +6,13 @@
 # Purpose: Identifies tables suitable for BigQuery Lakehouse Federation,
 # audits Iceberg compatibility versions, and verifies Service Principal access.
 #
-# Usage: ./script.sh [databricks-instance-id]
-# Example: ./script.sh my-workspace.cloud.databricks.com
+# credentials.json has to be in the same folder - service pricipal key like
+#  {
+#  "client_id": "",
+#  "client_secret": ""
+#  }
+# Usage: ./databricks_which_table.sh [databricks-instance-id] or type ID during run.
+# Example: ./databricks_which_table.sh my-workspace.cloud.databricks.com
 # ==============================================================================
 
 # 1. Load Credentials
