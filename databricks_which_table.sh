@@ -1,28 +1,10 @@
 #!/bin/bash
 
 # ==============================================================================
-#    .___             ___.                                
-#    |   | ____   ____\_ |__   ___________  ____          
-#    |   |/ ___\_/ __ \| __ \_/ __ \_  __ \/ ___\         
-#    |   \  \___\  ___/| \_\ \  ___/|  | \/ /_/  >        
-#    |___|\___  >\___  >___  /\___  >__|  \___  /         
-#             \/     \/    \/     \/     /_____/          
-#
-#       [NATIVE ICEBERG]                  [UNIFORM ICEBERG]
-#     "The Respected Guest"            "The Family in Disguise"
-#              /\                                 /\
-#             /  \                               /  \
-#            /____\                             /____\
-#  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-#          (Cold Water)                       /        \
-#     (No Liquid Clustering)                 /          \
-#   (Slower Photon Optimisations)           /____________\
-#                                          [ THE DELTA CORE ]
-# ==============================================================================
-# BIGQUERY FEDERATION AUDIT MODE ENABLED
+# BIGQUERY FEDERATION
 # 
 # The intersection of 'True External Storage' and 'Iceberg Format' 
-# is the golden ticket for BigQuery Lakehouse Federation (BigLake). 
+# is the golden ticket for BigQuery Lakehouse Federation via Lakehouse runtime catalog. 
 #
 # This script will now:
 # 1. Flag suitable tables with 🌐 [BQ Federation Ready]
