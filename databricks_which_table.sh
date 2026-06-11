@@ -87,16 +87,18 @@ while IFS='|' read -r CATALOG STORAGE_ROOT; do
             "https://${INSTANCE_ID}/api/2.1/unity-catalog/tables?catalog_name=${CATALOG}&schema_name=${SCHEMA}")
 
         # Extract Table Name and Type tag
+        # --- UPDATED JQ PARSING BLOCK ---
         RESULTS=$(echo "$TABLES_JSON" | jq -r '
             .tables[]? | 
             (.data_source_format // "" | ascii_downcase) as $format |
             (.table_type // "" | ascii_downcase) as $ttype |
             (.properties["delta.universalFormat.enabledFormats"] // "" | ascii_downcase | contains("iceberg")) as $is_uniform |
             (.properties["delta.enableIcebergCompatV2"] // "" | ascii_downcase == "true") as $is_compat |
+            (.properties["delta.feature.icebergCompatV2"] // "" | ascii_downcase == "supported") as $is_compat_v2 |
 
             if ($format == "iceberg" or ($ttype | contains("iceberg"))) then
                 "[Native]|\(.full_name)"
-            elif ($format == "delta" and ($is_uniform or $is_compat)) then
+            elif ($format == "delta" and ($is_uniform or $is_compat or $is_compat_v2)) then
                 "[UniForm]|\(.full_name)"
             else
                 empty
