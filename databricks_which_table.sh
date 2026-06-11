@@ -1,30 +1,33 @@
 #!/bin/bash
 
 # ==============================================================================
-# BIGQUERY FEDERATION
+# BIGQUERY FEDERATION AUDIT SCRIPT
 # 
-# The intersection of 'True External Storage' and 'Iceberg Format' 
-# is the golden ticket for BigQuery Lakehouse Federation via Lakehouse runtime catalog. 
+# Purpose: Identifies tables suitable for BigQuery Lakehouse Federation,
+# audits Iceberg compatibility versions, and verifies Service Principal access.
 #
-# This script will now:
-# 1. Identify Native Iceberg, UniForm v2, and UniForm v3 tables.
-# 2. Flag suitable tables with 🌐 [BQ Federation Ready] or ⚠️ [BQ Blocked]
-# 3. Audit the Service Principal's permissions on the Catalogue and Table
-#    to ensure it has full access (OWNER, ALL_PRIVILEGES, or MODIFY).
+# Usage: ./script.sh [databricks-instance-id]
+# Example: ./script.sh my-workspace.cloud.databricks.com
 # ==============================================================================
 
 # 1. Load Credentials
 if [ ! -f "credentials.json" ]; then
-    echo "Error: credentials.json not found."
+    echo "[ERROR] credentials.json not found."
     exit 1
 fi
 
 CLIENT_ID=$(jq -r '.client_id' credentials.json)
 CLIENT_SECRET=$(jq -r '.client_secret' credentials.json)
 
-read -p "Enter your Databricks Instance ID: " INSTANCE_ID
-INSTANCE_ID=$(echo "$INSTANCE_ID" | sed -e 's|https://||' -e 's|/||g')
+# Check if Instance ID was passed as a parameter
+if [ -n "$1" ]; then
+    INSTANCE_ID="$1"
+else
+    read -p "Enter your Databricks Instance ID: " INSTANCE_ID
+fi
 
+# Clean up the input just in case (removes https:// and trailing slashes)
+INSTANCE_ID=$(echo "$INSTANCE_ID" | sed -e 's|https://||' -e 's|/||g')
 WORKSPACE_ID=$(echo "$INSTANCE_ID" | cut -d'.' -f1)
 
 # 2. Get OAuth Token
@@ -35,48 +38,34 @@ TOKEN_RESPONSE=$(curl -s -X POST "https://${INSTANCE_ID}/oidc/v1/token" \
 ACCESS_TOKEN=$(echo "$TOKEN_RESPONSE" | jq -r '.access_token // empty')
 
 if [ -z "$ACCESS_TOKEN" ]; then
-    echo "Authentication Failed: $TOKEN_RESPONSE"
+    echo "[ERROR] Authentication Failed: $TOKEN_RESPONSE"
     exit 1
 fi
 
-echo "--- Authenticated (Workspace ID: $WORKSPACE_ID) ---"
-echo "Auditing Service Principal: $CLIENT_ID"
-echo ""
+echo "[INFO] Authenticated successfully. Workspace ID: $WORKSPACE_ID"
+echo "[INFO] Auditing Service Principal: $CLIENT_ID"
 
-# 3. Fetch Catalogues (Extracting both Name and Storage Root)
+# 3. Fetch Catalogues
 CATALOG_DATA=$(curl -s -H "Authorization: Bearer ${ACCESS_TOKEN}" \
     "https://${INSTANCE_ID}/api/2.1/unity-catalog/catalogs" | \
     jq -r '.catalogs[]? | 
     select(.name != "system" and .name != "main" and .name != "samples") | 
     "\(.name)|\(.storage_root // "NULL")"')
 
-# 4. Iterate through ALL selected catalogues
+# 4. Iterate through Catalogues
 while IFS='|' read -r CATALOG STORAGE_ROOT; do
-    echo "====================================================="
-    echo "Scanning Catalogue: $CATALOG"
     
+    echo ""
+    echo "======================================================================================================================================"
+    echo " CATALOGUE: $CATALOG"
+    echo "======================================================================================================================================"
+    printf "%-10s | %-50s | %-14s | %-14s | %s\n" "STATUS" "TABLE NAME" "FORMAT" "SP ACCESS" "NOTES"
+    echo "--------------------------------------------------------------------------------------------------------------------------------------"
+
     IS_TRUE_EXTERNAL=false
-    
-    # Check if storage is Default or True External
-    if [ "$STORAGE_ROOT" == "NULL" ] || [[ "$STORAGE_ROOT" == *"$WORKSPACE_ID"* ]]; then
-        echo "Storage:          [Default Workspace] ($STORAGE_ROOT)"
-    else
-        echo "Storage:          [Custom External Root] -> $STORAGE_ROOT"
+    if [ "$STORAGE_ROOT" != "NULL" ] && [[ "$STORAGE_ROOT" != *"$WORKSPACE_ID"* ]]; then
         IS_TRUE_EXTERNAL=true
-        
-        # --- AUDIT CATALOGUE ACCESS ---
-        CAT_PERMS=$(curl -s -H "Authorization: Bearer ${ACCESS_TOKEN}" \
-            "https://${INSTANCE_ID}/api/2.1/unity-catalog/effective-permissions/catalog/${CATALOG}")
-        
-        CAT_PRIVS=$(echo "$CAT_PERMS" | jq -r --arg sp "$CLIENT_ID" '.privilege_assignments[]? | select(.principal == $sp) | .privileges[]?' | tr '\n' ' ')
-        
-        if [[ "$CAT_PRIVS" == *"ALL_PRIVILEGES"* ]] || [[ "$CAT_PRIVS" == *"OWNER"* ]] || [[ "$CAT_PRIVS" == *"USE_CATALOG"* ]]; then
-            echo "Access (Cat):     🔑 SP has explicit access to this catalogue."
-        else
-            echo "Access (Cat):     ⚠️ Warning: SP lacks explicit full access to catalogue."
-        fi
     fi
-    echo "====================================================="
     
     SCHEMAS=$(curl -s -H "Authorization: Bearer ${ACCESS_TOKEN}" \
         "https://${INSTANCE_ID}/api/2.1/unity-catalog/schemas?catalog_name=${CATALOG}" | jq -r '.schemas[]?.name')
@@ -87,49 +76,49 @@ while IFS='|' read -r CATALOG STORAGE_ROOT; do
         TABLES_JSON=$(curl -s -H "Authorization: Bearer ${ACCESS_TOKEN}" \
             "https://${INSTANCE_ID}/api/2.1/unity-catalog/tables?catalog_name=${CATALOG}&schema_name=${SCHEMA}")
 
-        # Extract Table Name and Type tag
+        # Extract Table Details
         RESULTS=$(echo "$TABLES_JSON" | jq -r '
             .tables[]? | 
             (.data_source_format // "" | ascii_downcase) as $format |
             (.table_type // "" | ascii_downcase) as $ttype |
             (.properties["delta.universalFormat.enabledFormats"] // "" | ascii_downcase | contains("iceberg")) as $is_uniform |
             
-            # Check for v2
-            (.properties["delta.enableIcebergCompatV2"] // "" | ascii_downcase == "true") as $is_compat_v2_old |
-            (.properties["delta.feature.icebergCompatV2"] // "" | ascii_downcase == "supported") as $is_compat_v2_new |
-            
-            # Check for v3
-            (.properties["delta.enableIcebergCompatV3"] // "" | ascii_downcase == "true") as $is_compat_v3_old |
-            (.properties["delta.feature.icebergCompatV3"] // "" | ascii_downcase == "supported") as $is_compat_v3_new |
+            (.properties["delta.enableIcebergCompatV2"] // "" | ascii_downcase == "true") as $v2_old |
+            (.properties["delta.feature.icebergCompatV2"] // "" | ascii_downcase == "supported") as $v2_new |
+            (.properties["delta.enableIcebergCompatV3"] // "" | ascii_downcase == "true") as $v3_old |
+            (.properties["delta.feature.icebergCompatV3"] // "" | ascii_downcase == "supported") as $v3_new |
 
             if ($format == "iceberg" or ($ttype | contains("iceberg"))) then
-                "[Native]|\(.full_name)"
-            elif ($format == "delta" and ($is_compat_v3_old or $is_compat_v3_new)) then
-                "[UniForm v3]|\(.full_name)"
-            elif ($format == "delta" and ($is_uniform or $is_compat_v2_old or $is_compat_v2_new)) then
-                "[UniForm v2]|\(.full_name)"
+                "Native|\(.full_name)"
+            elif ($format == "delta" and ($v3_old or $v3_new)) then
+                "UniForm v3|\(.full_name)"
+            elif ($format == "delta" and ($is_uniform or $v2_old or $v2_new)) then
+                "UniForm v2|\(.full_name)"
             else
                 empty
             end
         ')
 
         # Process each found table
-        while IFS='|' read -r TAG TBL_NAME; do
+        while IFS='|' read -r FORMAT TBL_NAME; do
             if [ -n "$TBL_NAME" ]; then
-                FED_NOTE=""
-                PERM_CHECK=""
                 
-                # If it's True External, it's suitable for BigQuery Federation
-                if [ "$IS_TRUE_EXTERNAL" == true ]; then
-                    
-                    # Distinguish between v2 and v3 for the Federation Note
-                    if [[ "$TAG" == *"[UniForm v3]"* ]]; then
-                        FED_NOTE=" ⚠️ [BQ Blocked: Iceberg v3]"
-                    else
-                        FED_NOTE=" 🌐 [BQ Federation Ready]"
+                STATUS="READY"
+                NOTES=""
+                SP_ACCESS="N/A"
+
+                # 1. Check Storage Suitability
+                if [ "$IS_TRUE_EXTERNAL" == false ]; then
+                    STATUS="SKIPPED"
+                    NOTES="Internal workspace storage."
+                else
+                    # 2. Check Version Suitability
+                    if [[ "$FORMAT" == "UniForm v3" ]]; then
+                        STATUS="BLOCKED"
+                        NOTES="Iceberg v3 not yet supported."
                     fi
                     
-                    # --- AUDIT TABLE ACCESS ---
+                    # 3. Audit Table Permissions
                     TBL_PERMS=$(curl -s -H "Authorization: Bearer ${ACCESS_TOKEN}" \
                         "https://${INSTANCE_ID}/api/2.1/unity-catalog/effective-permissions/table/${TBL_NAME}")
                     
@@ -139,27 +128,30 @@ while IFS='|' read -r CATALOG STORAGE_ROOT; do
                         .privileges[]?' | tr '\n' ' ')
                         
                     if [[ "$SP_PRIVS" == *"ALL_PRIVILEGES"* ]] || [[ "$SP_PRIVS" == *"MODIFY"* ]]; then
-                        PERM_CHECK=" 🔑 [SP: Full Access]"
+                        SP_ACCESS="FULL"
                     elif [[ "$SP_PRIVS" == *"SELECT"* ]]; then
-                        PERM_CHECK=" 👁️ [SP: Read-Only]"
+                        SP_ACCESS="READ_ONLY"
                     else
-                        # Fallback to check literal owner
                         OWNER=$(curl -s -H "Authorization: Bearer ${ACCESS_TOKEN}" \
                             "https://${INSTANCE_ID}/api/2.1/unity-catalog/tables/${TBL_NAME}" | jq -r '.owner // ""')
                         
                         if [ "$OWNER" == "$CLIENT_ID" ]; then
-                             PERM_CHECK=" 🔑 [SP: Owner]"
+                             SP_ACCESS="OWNER"
                         else
-                             PERM_CHECK=" ⚠️ [SP: Missing explicit full access]"
+                             SP_ACCESS="MISSING"
+                             STATUS="BLOCKED"
+                             NOTES="${NOTES} SP lacks table access."
                         fi
                     fi
                 fi
                 
-                echo " >> [FOUND] $TAG $TBL_NAME$FED_NOTE$PERM_CHECK"
+                # Print the aligned row
+                printf "%-10s | %-50s | %-14s | %-14s | %s\n" "[$STATUS]" "$TBL_NAME" "$FORMAT" "$SP_ACCESS" "$NOTES"
             fi
         done <<< "$RESULTS"
 
     done
 done <<< "$CATALOG_DATA"
 
-echo "--- Search Complete ---"
+echo ""
+echo "[INFO] Audit Complete."
