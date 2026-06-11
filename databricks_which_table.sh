@@ -61,11 +61,11 @@ CATALOG_DATA=$(curl -s -H "Authorization: Bearer ${ACCESS_TOKEN}" \
 while IFS='|' read -r CATALOG STORAGE_ROOT; do
     
     echo ""
-    echo "======================================================================================================================================"
+    echo "================================================================================================================================================="
     echo " CATALOGUE: $CATALOG"
-    echo "======================================================================================================================================"
-    printf "%-10s | %-50s | %-14s | %-14s | %s\n" "STATUS" "TABLE NAME" "FORMAT" "SP ACCESS" "NOTES"
-    echo "--------------------------------------------------------------------------------------------------------------------------------------"
+    echo "================================================================================================================================================="
+    printf "%-10s | %-50s | %-20s | %-14s | %s\n" "STATUS" "TABLE NAME" "FORMAT" "SP ACCESS" "NOTES"
+    echo "-------------------------------------------------------------------------------------------------------------------------------------------------"
 
     IS_TRUE_EXTERNAL=false
     if [ "$STORAGE_ROOT" != "NULL" ] && [[ "$STORAGE_ROOT" != *"$WORKSPACE_ID"* ]]; then
@@ -81,7 +81,7 @@ while IFS='|' read -r CATALOG STORAGE_ROOT; do
         TABLES_JSON=$(curl -s -H "Authorization: Bearer ${ACCESS_TOKEN}" \
             "https://${INSTANCE_ID}/api/2.1/unity-catalog/tables?catalog_name=${CATALOG}&schema_name=${SCHEMA}")
 
-        # Extract Table Details (With Native Iceberg override fix included)
+        # Extract Table Details
         RESULTS=$(echo "$TABLES_JSON" | jq -r '
             .tables[]? | 
             (.data_source_format // "" | ascii_downcase) as $format |
@@ -98,14 +98,14 @@ while IFS='|' read -r CATALOG STORAGE_ROOT; do
 
             if ($format == "iceberg" or ($ttype | contains("iceberg")) or $is_native_ui) then
                 if ($iceberg_version == "3" or $v3_old or $v3_new) then
-                    "Native v3|\(.full_name)"
+                    "Managed Iceberg v3|\(.full_name)"
                 else
-                    "Native v2|\(.full_name)"
+                    "Managed Iceberg v2|\(.full_name)"
                 end
             elif ($format == "delta" and ($v3_old or $v3_new)) then
-                "UniForm v3|\(.full_name)"
+                "UniForm Iceberg v3|\(.full_name)"
             elif ($format == "delta" and ($is_uniform or $v2_old or $v2_new)) then
-                "UniForm v2|\(.full_name)"
+                "UniForm Iceberg v2|\(.full_name)"
             else
                 empty
             end
@@ -124,7 +124,7 @@ while IFS='|' read -r CATALOG STORAGE_ROOT; do
                     STATUS="SKIPPED"
                     NOTES="Internal workspace storage."
                 else
-                    # 2. Check Version Suitability (Catches both UniForm v3 and Native v3)
+                    # 2. Check Version Suitability
                     if [[ "$FORMAT" == *"v3"* ]]; then
                         STATUS="BLOCKED"
                         NOTES="Iceberg v3 not yet supported."
@@ -158,7 +158,7 @@ while IFS='|' read -r CATALOG STORAGE_ROOT; do
                 fi
                 
                 # Print the aligned row
-                printf "%-10s | %-50s | %-14s | %-14s | %s\n" "[$STATUS]" "$TBL_NAME" "$FORMAT" "$SP_ACCESS" "$NOTES"
+                printf "%-10s | %-50s | %-20s | %-14s | %s\n" "[$STATUS]" "$TBL_NAME" "$FORMAT" "$SP_ACCESS" "$NOTES"
             fi
         done <<< "$RESULTS"
 
