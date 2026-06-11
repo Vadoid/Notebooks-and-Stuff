@@ -6,7 +6,7 @@
 # Purpose: Identifies tables suitable for BigQuery Lakehouse Federation,
 # audits Iceberg compatibility versions, and verifies Service Principal access.
 #
-# credentials.json has to be in the same folder - service pricipal key like
+# credentials.json has to be in the same folder - service principal key like
 #  {
 #  "client_id": "",
 #  "client_secret": ""
@@ -81,7 +81,7 @@ while IFS='|' read -r CATALOG STORAGE_ROOT; do
         TABLES_JSON=$(curl -s -H "Authorization: Bearer ${ACCESS_TOKEN}" \
             "https://${INSTANCE_ID}/api/2.1/unity-catalog/tables?catalog_name=${CATALOG}&schema_name=${SCHEMA}")
 
-        # Extract Table Details
+        # Extract Table Details (With Native Iceberg override fix included)
         RESULTS=$(echo "$TABLES_JSON" | jq -r '
             .tables[]? | 
             (.data_source_format // "" | ascii_downcase) as $format |
@@ -92,9 +92,16 @@ while IFS='|' read -r CATALOG STORAGE_ROOT; do
             (.properties["delta.feature.icebergCompatV2"] // "" | ascii_downcase == "supported") as $v2_new |
             (.properties["delta.enableIcebergCompatV3"] // "" | ascii_downcase == "true") as $v3_old |
             (.properties["delta.feature.icebergCompatV3"] // "" | ascii_downcase == "supported") as $v3_new |
+            
+            ((.properties // {}) | (has("format-version") or has("write.data.path"))) as $is_native_ui |
+            ((.properties // {})["format-version"] // "2" | tostring) as $iceberg_version |
 
-            if ($format == "iceberg" or ($ttype | contains("iceberg"))) then
-                "Native|\(.full_name)"
+            if ($format == "iceberg" or ($ttype | contains("iceberg")) or $is_native_ui) then
+                if ($iceberg_version == "3" or $v3_old or $v3_new) then
+                    "Native v3|\(.full_name)"
+                else
+                    "Native v2|\(.full_name)"
+                end
             elif ($format == "delta" and ($v3_old or $v3_new)) then
                 "UniForm v3|\(.full_name)"
             elif ($format == "delta" and ($is_uniform or $v2_old or $v2_new)) then
@@ -117,8 +124,8 @@ while IFS='|' read -r CATALOG STORAGE_ROOT; do
                     STATUS="SKIPPED"
                     NOTES="Internal workspace storage."
                 else
-                    # 2. Check Version Suitability
-                    if [[ "$FORMAT" == "UniForm v3" ]]; then
+                    # 2. Check Version Suitability (Catches both UniForm v3 and Native v3)
+                    if [[ "$FORMAT" == *"v3"* ]]; then
                         STATUS="BLOCKED"
                         NOTES="Iceberg v3 not yet supported."
                     fi
