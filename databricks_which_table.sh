@@ -15,9 +15,20 @@
 # Example: ./databricks_which_table.sh my-workspace.cloud.databricks.com
 # ==============================================================================
 
+# --- Color Variables ---
+RESET='\033[0m'
+BOLD='\033[1m'
+DIM='\033[2m'
+GREEN='\033[32m'
+YELLOW='\033[33m'
+RED='\033[31m'
+CYAN='\033[36m'
+MAGENTA='\033[35m'
+# -----------------------
+
 # 1. Load Credentials
 if [ ! -f "credentials.json" ]; then
-    echo "[ERROR] credentials.json not found."
+    echo -e "${RED}[ERROR] credentials.json not found.${RESET}"
     exit 1
 fi
 
@@ -43,12 +54,12 @@ TOKEN_RESPONSE=$(curl -s -X POST "https://${INSTANCE_ID}/oidc/v1/token" \
 ACCESS_TOKEN=$(echo "$TOKEN_RESPONSE" | jq -r '.access_token // empty')
 
 if [ -z "$ACCESS_TOKEN" ]; then
-    echo "[ERROR] Authentication Failed: $TOKEN_RESPONSE"
+    echo -e "${RED}[ERROR] Authentication Failed: $TOKEN_RESPONSE${RESET}"
     exit 1
 fi
 
-echo "[INFO] Authenticated successfully. Workspace ID: $WORKSPACE_ID"
-echo "[INFO] Auditing Service Principal: $CLIENT_ID"
+echo -e "${GREEN}[INFO] Authenticated successfully. Workspace ID: $WORKSPACE_ID${RESET}"
+echo -e "${GREEN}[INFO] Auditing Service Principal: $CLIENT_ID${RESET}"
 
 # 3. Fetch Catalogues
 CATALOG_DATA=$(curl -s -H "Authorization: Bearer ${ACCESS_TOKEN}" \
@@ -61,11 +72,9 @@ CATALOG_DATA=$(curl -s -H "Authorization: Bearer ${ACCESS_TOKEN}" \
 while IFS='|' read -r CATALOG STORAGE_ROOT; do
     
     echo ""
-    echo "================================================================================================================================================="
-    echo " CATALOGUE: $CATALOG"
-    echo "================================================================================================================================================="
-    printf "%-10s | %-50s | %-20s | %-14s | %s\n" "STATUS" "TABLE NAME" "FORMAT" "SP ACCESS" "NOTES"
-    echo "-------------------------------------------------------------------------------------------------------------------------------------------------"
+    echo -e "${DIM}================================================================================${RESET}"
+    echo -e "${BOLD}${MAGENTA} CATALOGUE: $CATALOG${RESET}"
+    echo -e "${DIM}================================================================================${RESET}"
 
     IS_TRUE_EXTERNAL=false
     if [ "$STORAGE_ROOT" != "NULL" ] && [[ "$STORAGE_ROOT" != *"$WORKSPACE_ID"* ]]; then
@@ -124,7 +133,7 @@ while IFS='|' read -r CATALOG STORAGE_ROOT; do
                     STATUS="SKIPPED"
                     NOTES="Internal workspace storage."
                 else
-                    # 2. Audit Table Permissions (Iceberg v3 is now supported, check removed)
+                    # 2. Audit Table Permissions
                     TBL_PERMS=$(curl -s -H "Authorization: Bearer ${ACCESS_TOKEN}" \
                         "https://${INSTANCE_ID}/api/2.1/unity-catalog/effective-permissions/table/${TBL_NAME}")
                     
@@ -146,13 +155,31 @@ while IFS='|' read -r CATALOG STORAGE_ROOT; do
                         else
                              SP_ACCESS="MISSING"
                              STATUS="BLOCKED"
-                             NOTES="${NOTES} SP lacks table access."
+                             NOTES="SP lacks table access."
                         fi
                     fi
                 fi
                 
-                # Print the aligned row
-                printf "%-10s | %-50s | %-20s | %-14s | %s\n" "[$STATUS]" "$TBL_NAME" "$FORMAT" "$SP_ACCESS" "$NOTES"
+                # Assign status color
+                if [ "$STATUS" == "READY" ]; then
+                    STATUS_COLOR="${GREEN}"
+                elif [ "$STATUS" == "SKIPPED" ]; then
+                    STATUS_COLOR="${YELLOW}"
+                else
+                    STATUS_COLOR="${RED}"
+                fi
+
+                # Strip the redundant catalog name from the full table path
+                SHORT_TBL_NAME="${TBL_NAME#"$CATALOG."}"
+
+                # Print in a compact, multi-line tree format with COLOR
+                echo -e "${STATUS_COLOR}[$STATUS]${RESET} ${BOLD}${CYAN}$SHORT_TBL_NAME${RESET}"
+                if [ -n "$NOTES" ]; then
+                    echo -e "${DIM}  └─ Format: $FORMAT | Access: $SP_ACCESS | Notes: $NOTES${RESET}"
+                else
+                    echo -e "${DIM}  └─ Format: $FORMAT | Access: $SP_ACCESS${RESET}"
+                fi
+
             fi
         done <<< "$RESULTS"
 
@@ -160,4 +187,4 @@ while IFS='|' read -r CATALOG STORAGE_ROOT; do
 done <<< "$CATALOG_DATA"
 
 echo ""
-echo "[INFO] Audit Complete."
+echo -e "${GREEN}[INFO] Audit Complete.${RESET}"
