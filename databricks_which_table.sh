@@ -124,13 +124,7 @@ while IFS='|' read -r CATALOG STORAGE_ROOT; do
                     STATUS="SKIPPED"
                     NOTES="Internal workspace storage."
                 else
-                    # 2. Check Version Suitability
-                    if [[ "$FORMAT" == *"v3"* ]]; then
-                        STATUS="BLOCKED"
-                        NOTES="Iceberg v3 not yet supported."
-                    fi
-                    
-                    # 3. Audit Table Permissions
+                    # 2. Audit Table Permissions (Iceberg v3 is now supported, check removed)
                     TBL_PERMS=$(curl -s -H "Authorization: Bearer ${ACCESS_TOKEN}" \
                         "https://${INSTANCE_ID}/api/2.1/unity-catalog/effective-permissions/table/${TBL_NAME}")
                     
